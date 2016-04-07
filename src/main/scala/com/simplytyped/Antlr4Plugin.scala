@@ -2,6 +2,7 @@ package com.simplytyped
 
 import sbt._
 import Keys._
+import scala.collection._
 
 object Antlr4Plugin extends Plugin {
   val Antlr4 = config("antlr4")
@@ -24,7 +25,7 @@ object Antlr4Plugin extends Plugin {
           targetBaseDir = (javaSource in Antlr4).value,
           classpath = (managedClasspath in Antlr4).value.files,
           log = streams.value.log,
-          packageName = (antlr4PackageName in Antlr4).value,
+          maybePackageName = (antlr4PackageName in Antlr4).value,
           listenerOpt = (antlr4GenListener in Antlr4).value,
           visitorOpt = (antlr4GenVisitor in Antlr4).value
         )
@@ -37,26 +38,43 @@ object Antlr4Plugin extends Plugin {
       targetBaseDir: File,
       classpath: Seq[File],
       log: Logger,
-      packageName: Option[String],
+      maybePackageName: Option[String],
       listenerOpt: Boolean,
       visitorOpt: Boolean) = {
-    val targetDir = packageName.map{_.split('.').foldLeft(targetBaseDir){_/_}}.getOrElse(targetBaseDir)
-    val baseArgs = Seq("-cp", Path.makeString(classpath), "org.antlr.v4.Tool", "-o", targetDir.toString)
-    val packageArgs = packageName.toSeq.flatMap{p => Seq("-package",p)}
-    val listenerArgs = if(listenerOpt) Seq("-listener") else Seq("-no-listener")
-    val visitorArgs = if(visitorOpt) Seq("-visitor") else Seq("-no-visitor")
-    val sourceArgs = srcFiles.map{_.toString}
-    val args = baseArgs ++ packageArgs ++ listenerArgs ++ visitorArgs ++ sourceArgs
-    val exitCode = Process("java", args) ! log
-    if(exitCode != 0) sys.error(s"Antlr4 failed with exit code $exitCode")
-    (targetDir ** "*.java").get.toSet
+    var baseArgs = List("-cp", Path.makeString(classpath), "org.antlr.v4.Tool")
+    baseArgs ++= { if(listenerOpt) Seq("-listener") else Seq("-no-listener") }
+    baseArgs ++= { if(visitorOpt) Seq("-visitor") else Seq("-no-visitor") }
+
+    case class Package(name: String) {
+      val files = mutable.ListBuffer.empty[File]
+      val targetDir = name.split('.').foldLeft(targetBaseDir){_/_}
+      def args = Seq("-package", name, "-o", targetDir.toString) ++ files.map(_.toString)
+    }
+    val packages = mutable.Map.empty[String, Package]
+
+    for(file <- srcFiles) {
+      val packageName = maybePackageName.getOrElse(derivePackageName(file))
+      packages.getOrElseUpdate(packageName, Package(packageName)).files += file
+    }
+
+    for((_, p) <- packages) {
+      val exitCode = Process("java", baseArgs ++ p.args) ! log
+      if(exitCode != 0) sys.error(s"Antlr4 failed with exit code $exitCode")
+    }
+
+    (targetBaseDir ** "*.java").get.toSet
+  }
+
+  private def derivePackageName(file: File): String = {
+    val dirname = file.absolutePath.reverse.dropWhile(_ != '/').drop(1).reverse
+    dirname.split('/').reverse.takeWhile(_ != "antlr4").reverse.reduce(_ ++ "." ++ _)
   }
 
   val antlr4Settings = inConfig(Antlr4)(Seq(
     sourceDirectory <<= (sourceDirectory in Compile) {_ / "antlr4"},
     javaSource <<= (sourceManaged in Compile).apply(_ / "antlr4"),
     managedClasspath <<= (configuration, classpathTypes, update) map Classpaths.managedJars,
-    antlr4Version := "4.5.2-1",
+    antlr4Version := "4.5",
     antlr4Generate <<= antlr4GeneratorTask,
     antlr4Dependency := "org.antlr" % "antlr4" % antlr4Version.value,
     antlr4RuntimeDependency := "org.antlr" % "antlr4-runtime" % antlr4Version.value,

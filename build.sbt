@@ -4,6 +4,10 @@ name := "sbt-antlr4"
 
 organization := "com.simplytyped"
 
+scalaVersion := "2.10.5"
+
+crossScalaVersions := Seq("2.11.7")
+
 version := "0.7.10"
 
 publishTo := Some {
